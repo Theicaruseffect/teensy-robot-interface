@@ -1,0 +1,36 @@
+# Teensy 3.1 Robot Interface USB Device
+### Phillip Nash
+
+## Objective
+
+I need a USB device capable of being able to communicate with
+various external peripherals that I'm currently using for a
+robotics project i'm currently working on. The USB module will (eventually)
+support the following:
+
+	1) Controlling motor speeds 			(using PWM)
+	2) Interfacing with an alphanumeric display 	(using i2c)
+	3) Gyroscope, accelerometers etc 		(using i2c)
+	4) Interfacing with a set of buttons and a dial (using i2c)
+	5) Controlling servos				(using PWM)
+	6) Reading LiDAR readings			(using PWM)
+	5) And possibly much more....			(using your imagination)
+
+Each of these will have their own endpoints for communications.
+
+## Usage
+
+Run the ./build.sh script to compile the firmware and upload this to the Teensy 3.1.
+This requires the installation of the following:
+
+	arm-none-eabi-gcc
+	arm-none-eabi-as
+	arm-none-eabi-ar
+	arm-none-eabi-ld
+
+## Credit
+
+The code for initially configuring and controlling the Teensy's USB module
+was developed by (http://kevincuzner.com/2014/12/12/teensy-3-1-bare-metal-writing-a-usb-driver/).
+Interfacing and configuring the various hardware and configuring the USB endpoints is done
+by myself.
