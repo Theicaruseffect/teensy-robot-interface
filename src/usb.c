@@ -10,7 +10,8 @@
 #define ENDP0_SIZE 64
 #define ENDP1_SIZE 64
 
-#define LED_ON  GPIOC_PSOR=(1<<5)
+#define LED_ON   GPIOC_PSOR=(1<<5)
+#define LED_OFF  GPIOC_PCOR=(1<<5)
 
 typedef struct {
     union {
@@ -101,7 +102,7 @@ static uint8_t dev_descriptor[] = {
     0x00, //bDeviceSubClass
     0x00, //bDeviceProtocl
     ENDP0_SIZE, //bMaxPacketSize0
-    0xc0, 0x20, //idVendor
+    0xc0, 0x16, //idVendor
     0xdc, 0x05, //idProduct
     0x01, 0x00, //bcdDevice
     1, //iManufacturer
@@ -181,6 +182,27 @@ static void usb_endp0_transmit(const void* data, uint8_t length)
     //toggle the odd and data bits
     endp0_odd ^= 1;
     endp0_data ^= 1;
+}
+
+static uint8_t endp1_odd, endp1_data = 0;
+static void usb_endp1_receive(uint8_t length)
+{
+    char *data = (char *) table[BDT_INDEX(1, RX, endp1_odd)].addr;
+    int i = 0;
+
+	for (i = 0; i < 64; i++)
+	{
+   		if (data[i] == 'Y')
+    		{
+    		    LED_ON;
+    		} else
+    		{
+        	    LED_OFF;
+    		}
+	}
+
+    endp1_odd ^= 1;
+    endp1_data ^= 1;
 }
 
 /**
@@ -283,7 +305,7 @@ void usb_endp0_handler(uint8_t stat)
 
         //clear any pending IN stuff
         table[BDT_INDEX(0, TX, EVEN)].desc = 0;
-		table[BDT_INDEX(0, TX, ODD)].desc = 0;
+	table[BDT_INDEX(0, TX, ODD)].desc = 0;
         endp0_data = 1;
 
         //cast the data into our setup type and run the setup
@@ -330,22 +352,15 @@ void usb_endp1_handler(uint8_t stat)
     //determine which bdt we are looking at here
     bdt_t* bdt = &table[BDT_INDEX(1, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
 
-
     switch (BDT_PID(bdt->desc))
     {
-    case PID_SETUP:
-        //we are now done with the buffer
-        bdt->desc = BDT_DESC(ENDP1_SIZE, 1);
-
-        //clear any pending IN stuff
-        table[BDT_INDEX(1, TX, EVEN)].desc = 0;
-		table[BDT_INDEX(1, TX, ODD)].desc = 0;
-        //unfreeze this endpoint
-        USB0_CTL = USB_CTL_USBENSOFEN_MASK;
     case PID_OUT:
-	    LED_ON;
+	usb_endp1_receive(8);
         break;
     }
+
+    //Give the buffer back.
+    bdt->desc = BDT_DESC(ENDP1_SIZE, 1);
 }
 
 static void (*handlers[16])(uint8_t) = {
@@ -464,8 +479,6 @@ void USBOTG_IRQHandler(void)
         table[BDT_INDEX(1, TX, EVEN)].desc = 0;
         table[BDT_INDEX(1, TX, ODD)].desc = 0;
 
-	
-
 
         //initialize endpoint0 to 0x0d (41.5.23)
         //transmit, recieve, and handshake
@@ -473,6 +486,7 @@ void USBOTG_IRQHandler(void)
 
 
         USB0_ENDPT1 = USB_ENDPT_EPRXEN_MASK;
+//        USB0_ENDPT1 = USB_ENDPT_EPRXEN_MASK | USB_ENDPT_EPHSHK_MASK;
 
         //clear all interrupts...this is a reset
         USB0_ERRSTAT = 0xff;
