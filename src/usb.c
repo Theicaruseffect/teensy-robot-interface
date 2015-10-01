@@ -1,6 +1,7 @@
 #include "usb.h"
 #include "arm_cm4.h"
 #include "common.h"
+#include "string.h"
 
 #define PID_OUT   0x1
 #define PID_IN    0x9
@@ -9,6 +10,7 @@
 
 #define ENDP0_SIZE 64
 #define ENDP1_SIZE 64
+#define ENDP15_SIZE 64
 
 #define LED_ON   GPIOC_PSOR=(1<<5)
 #define LED_OFF  GPIOC_PCOR=(1<<5)
@@ -83,6 +85,7 @@ static bdt_t table[(USB_N_ENDPOINTS + 1)*4]; //max endpoints is 15 + 1 control
  */
 static uint8_t endp0_rx[2][ENDP0_SIZE];
 static uint8_t endp1_rx[2][ENDP1_SIZE];
+static uint8_t endp15_tx[2][ENDP15_SIZE];
 
 static const uint8_t* endp0_tx_dataptr = NULL; //pointer to current transmit chunk
 static uint16_t endp0_tx_datalen = 0; //length of data remaining to send
@@ -118,7 +121,7 @@ static uint8_t dev_descriptor[] = {
 static uint8_t cfg_descriptor[] = {
         9, //bLength
         2, //bDescriptorType
-        9 + 9 + 7, 0x00, //wTotalLength
+        9 + 9 + 7 + 7, 0x00, //wTotalLength
         1, //bNumInterfaces
         1, //bConfigurationValue,
         0, //iConfiguration
@@ -130,7 +133,7 @@ static uint8_t cfg_descriptor[] = {
         4, //bDescriptorType
         0, //bInterfaceNumber
         0, //bAlternateSetting
-        1, //bNumEndpoints
+        2, //bNumEndpoints
         0xff, //bInterfaceClass
         0x00, //bInterfaceSubClass,
         0x00, //bInterfaceProtocol
@@ -141,6 +144,15 @@ static uint8_t cfg_descriptor[] = {
             0x01, //bEndpointAddress,
             0x02, //bmAttributes, bulk endpoint
             ENDP1_SIZE, 0x00, //wMaxPacketSize,
+            0, //bInterval
+            /* INTERFACE 0, ENDPOINT 1 END */
+
+            /* INTERFACE 0, ENDPOINT 15 BEGIN */
+            7, //bLength
+            5, //bDescriptorType,
+            0x8F, //bEndpointAddress,
+            0x02, //bmAttributes, bulk endpoint
+            ENDP15_SIZE, 0x00, //wMaxPacketSize,
             0 //bInterval
             /* INTERFACE 0, ENDPOINT 1 END */
         /* INTERFACE 0 END */
@@ -188,20 +200,29 @@ static uint8_t endp1_odd, endp1_data = 0;
 static void usb_endp1_receive(uint8_t length)
 {
         char *data = (char *) table[BDT_INDEX(1, RX, endp1_odd)].addr;
-        int i = 0;
 
-        for (i = 0; i < 64; i++) 
-        {
-                if (data[i] == 'Y') 
-                {
-                    LED_ON;
-                } else {
-                    LED_OFF;
-                }
-        }
+	if (data[0] == 'Y')
+	{
+		LED_ON;
+	} else {
+		LED_OFF;
+	}
 
         endp1_odd ^= 1;
         endp1_data ^= 1;
+}
+
+static uint8_t endp15_odd, endp15_data = 0;
+static void usb_endp15_transmit(uint8_t length)
+{
+        char *data = (char *) table[BDT_INDEX(15, TX, endp1_odd)].addr;
+	char *str = "HELLO FROM ENDPOINT 15";
+	int len = strlen(str);
+
+	memcpy(data,str,len);
+
+        endp15_odd ^= 1;
+        endp15_data ^= 1;
 }
 
 /**
@@ -374,7 +395,7 @@ void usb_endp1_handler(uint8_t stat)
         switch (BDT_PID(bdt->desc))
         {
             case PID_OUT:
-            usb_endp1_receive(8);
+	    usb_endp1_receive(8);
             break;
         }
 
@@ -384,6 +405,31 @@ void usb_endp1_handler(uint8_t stat)
 
         table[BDT_INDEX(1, RX, EVEN)].addr = bdt->addr;
         table[BDT_INDEX(1, RX, EVEN)].desc = BDT_DESC(ENDP1_SIZE, 0);
+}
+
+/**
+ * Endpoint 15 handler
+ */
+void usb_endp15_handler(uint8_t stat)
+{
+        //determine which bdt we are looking at here
+        bdt_t* bdt = &table[BDT_INDEX(15, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
+
+        DisableInterrupts;
+
+        switch (BDT_PID(bdt->desc))
+        {
+            case PID_IN:
+		usb_endp15_transmit(8);
+            break;
+        }
+
+        //Give the buffer back.
+        bdt->desc = BDT_DESC(ENDP15_SIZE, 1);
+        EnableInterrupts;
+
+        table[BDT_INDEX(15, TX, EVEN)].addr = bdt->addr;
+        table[BDT_INDEX(15, TX, EVEN)].desc = BDT_DESC(ENDP1_SIZE, 0);
 }
 
 static void (*handlers[16])(uint8_t) = {
@@ -411,6 +457,7 @@ static void (*handlers[16])(uint8_t) = {
 static void usb_endp_default_handler(uint8_t stat) { }
 
 //weak aliases as "defaults" for the usb endpoint handlers
+//void usb_endp1_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
 void usb_endp2_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
 void usb_endp3_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
 void usb_endp4_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
@@ -424,7 +471,7 @@ void usb_endp11_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_ha
 void usb_endp12_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
 void usb_endp13_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
 void usb_endp14_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp15_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
+//void usb_endp15_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
 
 void usb_init(void)
 {
@@ -496,6 +543,25 @@ void USBOTG_IRQHandler(void)
             //transmit, recieve, and handshake
             USB0_ENDPT0 = USB_ENDPT_EPRXEN_MASK | USB_ENDPT_EPTXEN_MASK | USB_ENDPT_EPHSHK_MASK;
 
+            table[BDT_INDEX(1, RX, EVEN)].desc = BDT_DESC(ENDP1_SIZE, 0);
+            table[BDT_INDEX(1, RX, EVEN)].addr = endp1_rx[0];
+            table[BDT_INDEX(1, RX, ODD)].desc = BDT_DESC(ENDP1_SIZE, 0);
+            table[BDT_INDEX(1, RX, ODD)].addr = endp1_rx[1];
+            table[BDT_INDEX(1, TX, EVEN)].desc = 0;
+            table[BDT_INDEX(1, TX, ODD)].desc = 0;
+
+            USB0_ENDPT1 = USB_ENDPT_EPRXEN_MASK | USB_ENDPT_EPHSHK_MASK;
+
+            table[BDT_INDEX(15, TX, EVEN)].desc = BDT_DESC(ENDP15_SIZE, 0);
+            table[BDT_INDEX(15, TX, EVEN)].addr = endp15_tx[0];
+            table[BDT_INDEX(15, TX, ODD)].desc = BDT_DESC(ENDP15_SIZE, 0);
+            table[BDT_INDEX(15, TX, ODD)].addr = endp15_tx[1];
+            table[BDT_INDEX(15, RX, EVEN)].desc = 0;
+            table[BDT_INDEX(15, RX, ODD)].desc = 0;
+
+            USB0_ENDPT15 = USB_ENDPT_EPTXEN_MASK | USB_ENDPT_EPHSHK_MASK;
+
+
             //clear all interrupts...this is a reset
             USB0_ERRSTAT = 0xff;
             USB0_ISTAT = 0xff;
@@ -534,14 +600,6 @@ void USBOTG_IRQHandler(void)
             //Endpoint zero token
             if (endpoint == 0)
             {
-                    table[BDT_INDEX(1, RX, EVEN)].desc = BDT_DESC(ENDP1_SIZE, 0);
-                    table[BDT_INDEX(1, RX, EVEN)].addr = endp1_rx[0];
-                    table[BDT_INDEX(1, RX, ODD)].desc = BDT_DESC(ENDP1_SIZE, 0);
-                    table[BDT_INDEX(1, RX, ODD)].addr = endp1_rx[1];
-                    table[BDT_INDEX(1, TX, EVEN)].desc = 0;
-                    table[BDT_INDEX(1, TX, ODD)].desc = 0;
-
-                    USB0_ENDPT1 = USB_ENDPT_EPRXEN_MASK | USB_ENDPT_EPHSHK_MASK;
             } else { //Other endpoint tokens
             }
 
