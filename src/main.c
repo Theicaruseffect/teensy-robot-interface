@@ -1,9 +1,27 @@
 #include "common.h"
 #include "arm_cm4.h"
 #include "usb.h"
+#include "string.h"
 
 #define LED_ON  GPIOC_PSOR=(1<<5)
 #define LED_OFF GPIOC_PCOR=(1<<5)
+
+void usb_endpoint_15_transmit(char *out)
+{
+	char *str = "HELLO FROM ENDPOINT 15";
+	int len = strlen(str);
+        memcpy(out,str,len);
+}
+
+void usb_endpoint_1_receive(char *in)
+{
+	if (in[0] == 'Y')
+	{
+		LED_ON;
+	} else {
+		LED_OFF;
+	}
+}
 
 int main(void)
 {
@@ -12,6 +30,8 @@ int main(void)
     GPIOC_PDDR = (1<<5);   	// make this an output pin pin 13
     LED_OFF;                     // start with LED off
 
+    usb_set_endpoint_1_receive(usb_endpoint_1_receive);
+    usb_set_endpoint_15_transmit(usb_endpoint_15_transmit);
     usb_init();
 
     EnableInterrupts

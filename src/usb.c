@@ -1,7 +1,6 @@
 #include "usb.h"
 #include "arm_cm4.h"
 #include "common.h"
-#include "string.h"
 
 #define PID_OUT   0x1
 #define PID_IN    0x9
@@ -186,6 +185,11 @@ static const descriptor_entry_t descriptors[] = {
         { 0x0000, 0x0000, NULL, 0 }
 };
 
+
+static void (*usb_endpoint_1_receive) 	(char *in);
+static void (*usb_endpoint_15_transmit) (char * out);
+
+
 static uint8_t endp0_odd, endp0_data = 0;
 static void usb_endp0_transmit(const void* data, uint8_t length)
 {
@@ -200,29 +204,29 @@ static uint8_t endp1_odd, endp1_data = 0;
 static void usb_endp1_receive(uint8_t length)
 {
         char *data = (char *) table[BDT_INDEX(1, RX, endp1_odd)].addr;
-
-	if (data[0] == 'Y')
-	{
-		LED_ON;
-	} else {
-		LED_OFF;
-	}
-
+	usb_endpoint_1_receive(data);
         endp1_odd ^= 1;
         endp1_data ^= 1;
 }
+
 
 static uint8_t endp15_odd, endp15_data = 0;
 static void usb_endp15_transmit(uint8_t length)
 {
         char *data = (char *) table[BDT_INDEX(15, TX, endp1_odd)].addr;
-	char *str = "HELLO FROM ENDPOINT 15";
-	int len = strlen(str);
-
-	memcpy(data,str,len);
-
+	usb_endpoint_15_transmit(data);
         endp15_odd ^= 1;
         endp15_data ^= 1;
+}
+
+void usb_set_endpoint_1_receive(void (*callback) (char *data))
+{
+        usb_endpoint_1_receive = callback;
+}
+
+void usb_set_endpoint_15_transmit(void (*callback) (char *data))
+{
+	usb_endpoint_15_transmit = callback;
 }
 
 /**
@@ -540,7 +544,7 @@ void USBOTG_IRQHandler(void)
             table[BDT_INDEX(0, TX, ODD)].desc = 0;
 
             //initialize endpoint0 to 0x0d (41.5.23)
-            //transmit, recieve, and handshake
+            //transmit, receive, and handshake
             USB0_ENDPT0 = USB_ENDPT_EPRXEN_MASK | USB_ENDPT_EPTXEN_MASK | USB_ENDPT_EPHSHK_MASK;
 
             table[BDT_INDEX(1, RX, EVEN)].desc = BDT_DESC(ENDP1_SIZE, 0);
@@ -574,7 +578,6 @@ void USBOTG_IRQHandler(void)
             USB0_INTEN = USB_INTEN_USBRSTEN_MASK | USB_INTEN_ERROREN_MASK |
                                    USB_INTEN_SOFTOKEN_MASK | USB_INTEN_TOKDNEEN_MASK |
                                    USB_INTEN_SLEEPEN_MASK | USB_INTEN_STALLEN_MASK;
-
             return;
         }
         
@@ -596,15 +599,7 @@ void USBOTG_IRQHandler(void)
             //handle completion of current token being processed
             stat = USB0_STAT;
             endpoint = stat >> 4;
-
-            //Endpoint zero token
-            if (endpoint == 0)
-            {
-            } else { //Other endpoint tokens
-            }
-
             handlers[endpoint & 0xf](stat);
-
             USB0_ISTAT = USB_ISTAT_TOKDNE_MASK;
         }
         
