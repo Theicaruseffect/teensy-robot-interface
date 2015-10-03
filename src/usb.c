@@ -3,15 +3,21 @@
 #include "common.h"
 
 /**
- * Endpoint 0 receive buffers (2x64 bytes)
+ * Endpoint receive / transmit buffers (2x64 bytes)
  */
 static uint8_t endp0_rx[2][ENDP_SIZE];
 static uint8_t endp1_rx[2][ENDP_SIZE];
 static uint8_t endp15_tx[2][ENDP_SIZE];
-
+static uint8_t endp13_tx[2][ENDP_SIZE];
 static const uint8_t* endp0_tx_dataptr = NULL; //pointer to current transmit chunk
 static uint16_t endp0_tx_datalen = 0; //length of data remaining to send
+static uint8_t endp0_odd = 0, endp0_data = 0;
+static uint8_t endp1_odd = 0, endp1_data = 0;
+static uint8_t endp15_odd = 0, endp15_data = 0;
+static uint8_t endp13_odd = 0, endp13_data = 0;
 
+__attribute__ ((aligned(512), used))
+static bdt_t table[(USB_N_ENDPOINTS + 1) * 4]; //max endpoints is 15 + 1 control
 /**
  * Device descriptor
  * NOTE: This cannot be const because without additional attributes, it will
@@ -20,7 +26,7 @@ static uint16_t endp0_tx_datalen = 0; //length of data remaining to send
  * to RAM.
  */
 static uint8_t dev_descriptor[] = {
-        18, //bLength
+	18, //bLength
         1, //bDescriptorType
         0x00, 0x02, //bcdUSB
         0xff, //bDeviceClass
@@ -43,7 +49,7 @@ static uint8_t dev_descriptor[] = {
 static uint8_t cfg_descriptor[] = {
         9, //bLength
         2, //bDescriptorType
-        9 + 9 + 7 + 7, 0x00, //wTotalLength
+        9 + 9 + 7 + 7 + 7, 0x00, //wTotalLength
         1, //bNumInterfaces
         1, //bConfigurationValue,
         0, //iConfiguration
@@ -55,30 +61,36 @@ static uint8_t cfg_descriptor[] = {
         4, //bDescriptorType
         0, //bInterfaceNumber
         0, //bAlternateSetting
-        2, //bNumEndpoints
+        3, //bNumEndpoints
         0xff, //bInterfaceClass
         0x00, //bInterfaceSubClass,
         0x00, //bInterfaceProtocol
         0, //iInterface
-            /* INTERFACE 0, ENDPOINT 1 BEGIN */
-            7, //bLength
-            5, //bDescriptorType,
-            0x01, //bEndpointAddress,
-            0x02, //bmAttributes, bulk endpoint
-            ENDP_SIZE, 0x00, //wMaxPacketSize,
-            0, //bInterval
-            /* INTERFACE 0, ENDPOINT 1 END */
-
-            /* INTERFACE 0, ENDPOINT 15 BEGIN */
-            7, //bLength
-            5, //bDescriptorType,
-            0x8F, //bEndpointAddress,
-            0x02, //bmAttributes, bulk endpoint
-            ENDP_SIZE, 0x00, //wMaxPacketSize,
-            0 //bInterval
-            /* INTERFACE 0, ENDPOINT 1 END */
-        /* INTERFACE 0 END */
-
+	/* INTERFACE 0, ENDPOINT 1 BEGIN */
+	7, //bLength
+	5, //bDescriptorType,
+	0x01, //bEndpointAddress,
+	0x02, //bmAttributes, bulk endpoint
+	ENDP_SIZE, 0x00, //wMaxPacketSize,
+	0, //bInterval
+	/* INTERFACE 0, ENDPOINT 1 END */
+	/* INTERFACE 0, ENDPOINT 13 BEGIN */
+	7, //bLength
+	5, //bDescriptorType,
+	0x8D, //bEndpointAddress,
+	0x02, //bmAttributes, bulk endpoint
+	ENDP_SIZE, 0x00, //wMaxPacketSize,
+	0, //bInterval
+	/* INTERFACE 0, ENDPOINT 13 END */
+	/* INTERFACE 0, ENDPOINT 15 BEGIN */
+	7, //bLength
+	5, //bDescriptorType,
+	0x8F, //bEndpointAddress,
+	0x02, //bmAttributes, bulk endpoint
+	ENDP_SIZE, 0x00, //wMaxPacketSize,
+	0 //bInterval
+	/* INTERFACE 0, ENDPOINT 1 END */
+	/* INTERFACE 0 END */
 };
 
 static str_descriptor_t lang_descriptor = {
@@ -108,48 +120,105 @@ static const descriptor_entry_t descriptors[] = {
         { 0x0000, 0x0000, NULL, 0 }
 };
 
-
-static void (*usb_endpoint_1_receive) 	(char *in);
-static void (*usb_endpoint_15_transmit) (char * out);
-
-
-static uint8_t endp0_odd, endp0_data = 0;
 static void usb_endp0_transmit(const void* data, uint8_t length)
 {
-        table[BDT_INDEX(0, TX, endp0_odd)].addr = (void *)data;
-        table[BDT_INDEX(0, TX, endp0_odd)].desc = BDT_DESC(length, endp0_data);
-        //toggle the odd and data bits
-        endp0_odd ^= 1;
-        endp0_data ^= 1;
+	table[BDT_INDEX(0, TX, endp0_odd)].addr = (void *)data;
+	table[BDT_INDEX(0, TX, endp0_odd)].desc = BDT_DESC(length, endp0_data);
+	//toggle the odd and data bits
+	endp0_odd ^= 1;
+	endp0_data ^= 1;
 }
 
-static uint8_t endp1_odd, endp1_data = 0;
-static void usb_endp1_receive(uint8_t length)
+static void (*receive_handlers[15])(char *) = {
+        usb_endp1_receive,
+        usb_endp2_receive,
+        usb_endp3_receive,
+        usb_endp4_receive,
+        usb_endp5_receive,
+        usb_endp6_receive,
+        usb_endp7_receive,
+        usb_endp8_receive,
+        usb_endp9_receive,
+        usb_endp10_receive,
+        usb_endp11_receive,
+        usb_endp12_receive,
+        usb_endp13_receive,
+        usb_endp14_receive,
+        usb_endp15_receive,
+};
+
+static void (*transmit_handlers[15])(char *) = {
+        usb_endp1_transmit,
+        usb_endp2_transmit,
+        usb_endp3_transmit,
+        usb_endp4_transmit,
+        usb_endp5_transmit,
+        usb_endp6_transmit,
+        usb_endp7_transmit,
+        usb_endp8_transmit,
+        usb_endp9_transmit,
+        usb_endp10_transmit,
+        usb_endp11_transmit,
+        usb_endp12_transmit,
+        usb_endp13_transmit,
+        usb_endp14_transmit,
+        usb_endp15_transmit,
+};
+
+
+
+void usb_set_endpoint_on_receive(void (*callback) (char *data), uint8_t endpoint)
 {
-        char *data = (char *) table[BDT_INDEX(1, RX, endp1_odd)].addr;
-	usb_endpoint_1_receive(data);
-        endp1_odd ^= 1;
-        endp1_data ^= 1;
+	receive_handlers[endpoint - 1] = callback;
 }
 
-
-static uint8_t endp15_odd, endp15_data = 0;
-static void usb_endp15_transmit(uint8_t length)
+void usb_set_endpoint_on_transmit(void (*callback) (char *data), uint8_t endpoint)
 {
-        char *data = (char *) table[BDT_INDEX(15, TX, endp1_odd)].addr;
-	usb_endpoint_15_transmit(data);
-        endp15_odd ^= 1;
-        endp15_data ^= 1;
+	transmit_handlers[endpoint - 1] = callback;
 }
 
-void usb_set_endpoint_1_receive(void (*callback) (char *data))
+static void usb_endp_receive(uint8_t endpoint, bdt_t *bdt)
 {
-        usb_endpoint_1_receive = callback;
+	char *data = NULL;
+	
+	switch (endpoint)
+	{
+	case 1:
+		data = (char *) table[BDT_INDEX(endpoint, RX, endp1_odd)].addr;
+		receive_handlers[endpoint - 1](data);
+		endp1_odd ^= 1;
+		endp1_data ^= 1;
+		break;
+	}
+	
+	bdt->desc = BDT_DESC(ENDP_SIZE, 1);
+	table[BDT_INDEX(endpoint, RX, EVEN)].addr = bdt->addr;
+        table[BDT_INDEX(endpoint, RX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
 }
 
-void usb_set_endpoint_15_transmit(void (*callback) (char *data))
+static void usb_endp_transmit(uint8_t endpoint, bdt_t *bdt)
 {
-	usb_endpoint_15_transmit = callback;
+	char *data = NULL;
+	
+	switch (endpoint)
+	{
+	case 13:
+		data = (char *) table[BDT_INDEX(endpoint, TX, endp13_odd)].addr;
+		transmit_handlers[endpoint - 1](data);
+		endp13_odd ^= 1;
+		endp13_data ^= 1;
+		break;
+	case 15:
+		data = (char *) table[BDT_INDEX(endpoint, TX, endp15_odd)].addr;
+		transmit_handlers[endpoint - 1](data);
+		endp15_odd ^= 1;
+		endp15_data ^= 1;
+		break;
+	}
+	
+	bdt->desc = BDT_DESC(ENDP_SIZE, 1);
+        table[BDT_INDEX(endpoint, TX, EVEN)].addr = bdt->addr;
+        table[BDT_INDEX(endpoint, TX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
 }
 
 /**
@@ -162,35 +231,32 @@ static void usb_endp0_handle_setup(setup_t* packet)
         uint8_t data_length = 0;
         uint32_t size = 0;
 
-
         switch(packet->wRequestAndType)
         {
-                case 0x0500: //set address (wait for IN packet)
-                    break;
-                case 0x0900: //set configuration
-                    //we only have one configuration at this time
-                    break;
-                case 0x0680: //get descriptor
-                case 0x0681:
-                    
-                    for (entry = descriptors; 1; entry++)
-                    {
-                        if (entry->addr == NULL)
-                            break;
+	case 0x0500: //set address (wait for IN packet)
+	    break;
+	case 0x0900: //set configuration
+	    //we only have one configuration at this time
+	    break;
+	case 0x0680: //get descriptor
+	case 0x0681:
+		for (entry = descriptors; 1; entry++)
+		{
+		    if (entry->addr == NULL)
+			break;
 
-                        if (packet->wValue == entry->wValue && packet->wIndex == entry->wIndex)
-                        {
-                            //this is the descriptor to send
-                            data = entry->addr;
-                            data_length = entry->length;
-                            goto send;
-                        }
-                    }
-                    
-                    goto stall;
-                    break;
-                default:
-                    goto stall;
+		    if (packet->wValue == entry->wValue && packet->wIndex == entry->wIndex)
+		    {
+			//this is the descriptor to send
+			data = entry->addr;
+			data_length = entry->length;
+			goto send;
+		    }
+		}
+	    goto stall;
+	    break;
+	default:
+	    goto stall;
         }
 
         //if we are sent here, we need to send some data
@@ -241,164 +307,64 @@ static void usb_endp0_handle_setup(setup_t* packet)
 /**
  * Endpoint 0 handler
  */
-void usb_endp0_handler(uint8_t stat)
+void usb_endp0_handler(uint8_t stat, uint8_t endpoint)
 {
         static setup_t last_setup;
-
         const uint8_t* data = NULL;
         uint32_t size = 0;
-
-
         //determine which bdt we are looking at here
-        bdt_t* bdt = &table[BDT_INDEX(0, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
+        bdt_t* bdt = &table[BDT_INDEX(endpoint, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
 
         switch (BDT_PID(bdt->desc))
         {
-                case PID_SETUP:
-                    //extract the setup token
-                            last_setup = *((setup_t*)(bdt->addr));
+	case PID_SETUP:
+		//extract the setup token
+		last_setup = *((setup_t*)(bdt->addr));
 
-                            //we are now done with the buffer
-                    bdt->desc = BDT_DESC(ENDP_SIZE, 1);
+		//we are now done with the buffer
+		bdt->desc = BDT_DESC(ENDP_SIZE, 1);
 
-                    //clear any pending IN stuff
-                    table[BDT_INDEX(0, TX, EVEN)].desc = 0;
-                    table[BDT_INDEX(0, TX, ODD)].desc = 0;
-                    endp0_data = 1;
+		//clear any pending IN stuff
+		table[BDT_INDEX(endpoint, TX, EVEN)].desc = 0;
+		table[BDT_INDEX(endpoint, TX, ODD)].desc = 0;
+		endp0_data = 1;
 
-                    //cast the data into our setup type and run the setup
-                    usb_endp0_handle_setup(&last_setup);//&last_setup);
+		//cast the data into our setup type and run the setup
+		usb_endp0_handle_setup(&last_setup);//&last_setup);
 
-                    //unfreeze this endpoint
-                    USB0_CTL = USB_CTL_USBENSOFEN_MASK;
-                    break;
-                case PID_IN:
-                    //continue sending any pending transmit data
-                    data = endp0_tx_dataptr;
-                    
-                    if (data)
-                    {
-                            size = endp0_tx_datalen;
-                            
-                            if (size > ENDP_SIZE)
-                            {
-                                size = ENDP_SIZE;
-                                
-                                usb_endp0_transmit(data, size);
-                                
-                                data += size;
-                                endp0_tx_datalen -= size;
-                                endp0_tx_dataptr = (endp0_tx_datalen > 0 || size == ENDP_SIZE) ? data : NULL;
-                            }
-                    }
+		//unfreeze this endpoint
+		USB0_CTL = USB_CTL_USBENSOFEN_MASK;
+		break;
+	case PID_IN:
+		//continue sending any pending transmit data
+		data = endp0_tx_dataptr;
 
-                    if (last_setup.wRequestAndType == 0x0500)
-                    {
-                        USB0_ADDR = last_setup.wValue;
-                    }
-                    
-                    break;
-                case PID_OUT:
-                    //nothing to do here..just give the buffer back
-                    bdt->desc = BDT_DESC(ENDP_SIZE, 1);
-                    break;
-                case PID_SOF:
-                    break;
+		if (data)
+		{
+			size = endp0_tx_datalen;
+
+			if (size > ENDP_SIZE)
+			{
+			    size = ENDP_SIZE;
+			    usb_endp0_transmit(data, size);
+			    data += size;
+			    endp0_tx_datalen -= size;
+			    endp0_tx_dataptr = (endp0_tx_datalen > 0 || size == ENDP_SIZE) ? data : NULL;
+			}
+		}
+
+		if (last_setup.wRequestAndType == 0x0500)
+			USB0_ADDR = last_setup.wValue;
+		break;
+	case PID_OUT:
+		//nothing to do here..just give the buffer back
+		bdt->desc = BDT_DESC(ENDP_SIZE, 1);
+		break;
+	case PID_SOF:
+		break;
         }
-
         USB0_CTL = USB_CTL_USBENSOFEN_MASK;
 }
-
-/**
- * Endpoint 1 handler
- */
-void usb_endp1_handler(uint8_t stat)
-{
-        //determine which bdt we are looking at here
-        bdt_t* bdt = &table[BDT_INDEX(1, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
-
-        DisableInterrupts;
-
-        switch (BDT_PID(bdt->desc))
-        {
-            case PID_OUT:
-	    usb_endp1_receive(8);
-            break;
-        }
-
-        //Give the buffer back.
-        bdt->desc = BDT_DESC(ENDP_SIZE, 1);
-        EnableInterrupts;
-
-        table[BDT_INDEX(1, RX, EVEN)].addr = bdt->addr;
-        table[BDT_INDEX(1, RX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
-}
-
-/**
- * Endpoint 15 handler
- */
-void usb_endp15_handler(uint8_t stat)
-{
-        //determine which bdt we are looking at here
-        bdt_t* bdt = &table[BDT_INDEX(15, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
-
-        DisableInterrupts;
-
-        switch (BDT_PID(bdt->desc))
-        {
-            case PID_IN:
-		usb_endp15_transmit(8);
-            break;
-        }
-
-        //Give the buffer back.
-        bdt->desc = BDT_DESC(ENDP_SIZE, 1);
-        EnableInterrupts;
-
-        table[BDT_INDEX(15, TX, EVEN)].addr = bdt->addr;
-        table[BDT_INDEX(15, TX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
-}
-
-static void (*handlers[16])(uint8_t) = {
-        usb_endp0_handler,
-        usb_endp1_handler,
-        usb_endp2_handler,
-        usb_endp3_handler,
-        usb_endp4_handler,
-        usb_endp5_handler,
-        usb_endp6_handler,
-        usb_endp7_handler,
-        usb_endp8_handler,
-        usb_endp9_handler,
-        usb_endp10_handler,
-        usb_endp11_handler,
-        usb_endp12_handler,
-        usb_endp13_handler,
-        usb_endp14_handler,
-        usb_endp15_handler,
-};
-
-/**
- * Default handler for USB endpoints that does nothing
- */
-static void usb_endp_default_handler(uint8_t stat) { }
-
-//weak aliases as "defaults" for the usb endpoint handlers
-//void usb_endp1_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp2_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp3_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp4_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp5_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp6_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp7_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp8_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp9_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp10_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp11_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp12_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp13_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-void usb_endp14_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
-//void usb_endp15_handler(uint8_t) __attribute__((weak, alias("usb_endp_default_handler")));
 
 void usb_init(void)
 {
@@ -412,8 +378,8 @@ void usb_init(void)
         }
 
         //1: Select clock source
-        SIM_SOPT2 |= SIM_SOPT2_USBSRC_MASK | SIM_SOPT2_PLLFLLSEL_MASK; //we use MCGPLLCLK divided by USB fractional divider
-        SIM_CLKDIV2 = SIM_CLKDIV2_USBDIV(1);// SIM_CLKDIV2_USBDIV(2) | SIM_CLKDIV2_USBFRAC_MASK; //(USBFRAC + 1)/(USBDIV + 1) = (1 + 1)/(2 + 1) = 2/3 for 72Mhz clock
+        SIM_SOPT2 |= SIM_SOPT2_USBSRC_MASK | SIM_SOPT2_PLLFLLSEL_MASK;
+        SIM_CLKDIV2 = SIM_CLKDIV2_USBDIV(1);
 
         //2: Gate USB clock
         SIM_SCGC4 |= SIM_SCGC4_USBOTG_MASK;
@@ -444,6 +410,55 @@ void usb_init(void)
         //7: Enable pull-up resistor on D+ (Full speed, 12Mbit/s)
         USB0_CONTROL = USB_CONTROL_DPPULLUPNONOTG_MASK;
 }
+static void init_bdt(uint8_t transmit, uint8_t endpoint,  uint8_t (*buffer)[64])
+{
+	if (transmit)
+	{
+		table[BDT_INDEX(endpoint, TX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
+		table[BDT_INDEX(endpoint, TX, EVEN)].addr = buffer[0];
+		table[BDT_INDEX(endpoint, TX, ODD)].desc = BDT_DESC(ENDP_SIZE, 0);
+		table[BDT_INDEX(endpoint, TX, ODD)].addr = buffer[1];
+		table[BDT_INDEX(endpoint, RX, EVEN)].desc = 0;
+		table[BDT_INDEX(endpoint, RX, ODD)].desc = 0;
+	} else {
+		table[BDT_INDEX(endpoint, RX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
+		table[BDT_INDEX(endpoint, RX, EVEN)].addr = buffer[0];
+		table[BDT_INDEX(endpoint, RX, ODD)].desc = BDT_DESC(ENDP_SIZE, 0);
+		table[BDT_INDEX(endpoint, RX, ODD)].addr = buffer[1];
+		table[BDT_INDEX(endpoint, TX, EVEN)].desc = 0;
+		table[BDT_INDEX(endpoint, TX, ODD)].desc = 0;
+	}
+}
+
+static void on_transmit(uint8_t endpoint, uint8_t stat)
+{
+	//determine which bdt we are looking at here
+        bdt_t* bdt = &table[BDT_INDEX(endpoint, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
+
+        DisableInterrupts;
+        switch (BDT_PID(bdt->desc))
+        {
+            case PID_IN:
+		usb_endp_transmit(endpoint, bdt);
+            break;
+        }
+        EnableInterrupts;
+}
+
+static void on_receive(uint8_t endpoint, uint8_t stat)
+{
+	//determine which bdt we are looking at here
+        bdt_t* bdt = &table[BDT_INDEX(endpoint, (stat & USB_STAT_TX_MASK) >> USB_STAT_TX_SHIFT, (stat & USB_STAT_ODD_MASK) >> USB_STAT_ODD_SHIFT)];
+
+        DisableInterrupts;
+        switch (BDT_PID(bdt->desc))
+        {
+	case PID_OUT:
+		usb_endp_receive(endpoint, bdt);
+		break;
+        }
+        EnableInterrupts;
+}
 
 void USBOTG_IRQHandler(void)
 {
@@ -451,51 +466,31 @@ void USBOTG_IRQHandler(void)
         uint8_t stat, endpoint;
 
         status = USB0_ISTAT;
-
+	//handle USB reset
         if (status & USB_ISTAT_USBRST_MASK)
         {
-            //handle USB reset
-
-            //initialize endpoint 0 ping-pong buffers
             USB0_CTL |= USB_CTL_ODDRST_MASK;
             endp0_odd = 0;
-            table[BDT_INDEX(0, RX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
-            table[BDT_INDEX(0, RX, EVEN)].addr = endp0_rx[0];
-            table[BDT_INDEX(0, RX, ODD)].desc = BDT_DESC(ENDP_SIZE, 0);
-            table[BDT_INDEX(0, RX, ODD)].addr = endp0_rx[1];
-            table[BDT_INDEX(0, TX, EVEN)].desc = 0;
-            table[BDT_INDEX(0, TX, ODD)].desc = 0;
-
-            //initialize endpoint0 to 0x0d (41.5.23)
-            //transmit, receive, and handshake
+	    endp1_odd = 0;
+	    endp13_odd = 0;
+	    endp15_odd = 0;
+	    
+	    //initialize endpoint ping-pong buffers
+	    init_bdt(0,0,endp0_rx);	//Endpoint 0
+	    init_bdt(0,1,endp1_rx);	//Endpoint 1
+	    init_bdt(1,13,endp13_tx);	//Endpoint 13
+	    init_bdt(1,15,endp15_tx);	//Endpoint 15
+	    
+	    //Update these for each endpoint
             USB0_ENDPT0 = USB_ENDPT_EPRXEN_MASK | USB_ENDPT_EPTXEN_MASK | USB_ENDPT_EPHSHK_MASK;
-
-            table[BDT_INDEX(1, RX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
-            table[BDT_INDEX(1, RX, EVEN)].addr = endp1_rx[0];
-            table[BDT_INDEX(1, RX, ODD)].desc = BDT_DESC(ENDP_SIZE, 0);
-            table[BDT_INDEX(1, RX, ODD)].addr = endp1_rx[1];
-            table[BDT_INDEX(1, TX, EVEN)].desc = 0;
-            table[BDT_INDEX(1, TX, ODD)].desc = 0;
-
             USB0_ENDPT1 = USB_ENDPT_EPRXEN_MASK | USB_ENDPT_EPHSHK_MASK;
-
-            table[BDT_INDEX(15, TX, EVEN)].desc = BDT_DESC(ENDP_SIZE, 0);
-            table[BDT_INDEX(15, TX, EVEN)].addr = endp15_tx[0];
-            table[BDT_INDEX(15, TX, ODD)].desc = BDT_DESC(ENDP_SIZE, 0);
-            table[BDT_INDEX(15, TX, ODD)].addr = endp15_tx[1];
-            table[BDT_INDEX(15, RX, EVEN)].desc = 0;
-            table[BDT_INDEX(15, RX, ODD)].desc = 0;
-
+	    USB0_ENDPT13 = USB_ENDPT_EPTXEN_MASK | USB_ENDPT_EPHSHK_MASK;
             USB0_ENDPT15 = USB_ENDPT_EPTXEN_MASK | USB_ENDPT_EPHSHK_MASK;
-
-
             //clear all interrupts...this is a reset
             USB0_ERRSTAT = 0xff;
             USB0_ISTAT = 0xff;
-
             //after reset, we are address 0, per USB spec
             USB0_ADDR = 0;
-
             //all necessary interrupts are now active
             USB0_ERREN = 0xFF;
             USB0_INTEN = USB_INTEN_USBRSTEN_MASK | USB_INTEN_ERROREN_MASK |
@@ -522,7 +517,18 @@ void USBOTG_IRQHandler(void)
             //handle completion of current token being processed
             stat = USB0_STAT;
             endpoint = stat >> 4;
-            handlers[endpoint & 0xf](stat);
+	    endpoint = endpoint & 0xf;
+	    
+	    if (endpoint == 0) { //Special case for endpoint zero,
+		usb_endp0_handler(stat, endpoint);
+	    } else { //User configurable endpoints,
+		if (stat & 0x08) {	//Transmit token
+			on_transmit(endpoint, stat);   
+		} else {		//Receive token
+			on_receive(endpoint, stat);   
+		}
+	    }
+	    
             USB0_ISTAT = USB_ISTAT_TOKDNE_MASK;
         }
         
@@ -538,3 +544,4 @@ void USBOTG_IRQHandler(void)
             USB0_ISTAT = USB_ISTAT_STALL_MASK;
         }
 }
+

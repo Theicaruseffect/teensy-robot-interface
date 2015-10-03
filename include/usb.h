@@ -70,16 +70,9 @@ typedef struct {
  * A bidirectional endpoint would then need 4 entries
  */
 typedef struct {
-        uint32_t desc;
+	uint32_t desc;
         void* addr;
 } bdt_t;
-
-
-/**
- * Buffer descriptor table, aligned to a 512-byte boundary (see linker file)
- */
-__attribute__ ((aligned(512), used))
-static bdt_t table[(USB_N_ENDPOINTS + 1)*4]; //max endpoints is 15 + 1 control
 
 
 /**
@@ -87,24 +80,68 @@ static bdt_t table[(USB_N_ENDPOINTS + 1)*4]; //max endpoints is 15 + 1 control
  */
 void usb_init(void);
 
-void usb_endp0_handler(uint8_t);
-void usb_endp1_handler(uint8_t);
-void usb_endp2_handler(uint8_t);
-void usb_endp3_handler(uint8_t);
-void usb_endp4_handler(uint8_t);
-void usb_endp5_handler(uint8_t);
-void usb_endp6_handler(uint8_t);
-void usb_endp7_handler(uint8_t);
-void usb_endp8_handler(uint8_t);
-void usb_endp9_handler(uint8_t);
-void usb_endp10_handler(uint8_t);
-void usb_endp11_handler(uint8_t);
-void usb_endp12_handler(uint8_t);
-void usb_endp13_handler(uint8_t);
-void usb_endp14_handler(uint8_t);
-void usb_endp15_handler(uint8_t);
+/**
+ * 
+ * This allows methods to be called when data has been received on the associated
+ * endpoint. 
+ * 
+ * @param callback function to execute when the associated endpoint has received
+ * data 
+ * @param endpoint which endpoint this callback is associated with (1 - 15)
+ */
+void usb_set_endpoint_on_receive(void (*callback) (char *data), uint8_t endpoint);
 
-void usb_set_endpoint_1_receive(void (*handler) (char *in));
-void usb_set_endpoint_15_transmit(void (*handler) (char *out));
+/**
+ * 
+ * @param callback callback function to execute when the associated endpoint 
+ * is ready to transmit data on the endpoint
+ * @param endpoint which endpoint this callback is associated with (1 - 15)
+ */
+void usb_set_endpoint_on_transmit(void (*callback) (char *data), uint8_t endpoint);
 
+
+/**
+ * Default handler for USB receiving endpoints
+ * 
+ * @param data the received USB data 64K in size
+ */
+static void usb_endp_default_receive(char * data) { }
+void usb_endp1_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp2_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp3_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp4_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp5_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp6_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp7_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp8_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp9_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp10_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp11_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp12_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp13_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp14_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+void usb_endp15_receive(char *) __attribute__((weak, alias("usb_endp_default_receive")));
+
+
+/**
+ * Default handler for USB transmitting endpoints
+ * 
+ * @param data to be transmitting from the USB endpoint, Data 64K in size
+ */
+static void usb_endp_default_transmit(char * data) { }
+void usb_endp1_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp2_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp3_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp4_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp5_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp6_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp7_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp8_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp9_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp10_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp11_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp12_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp13_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp14_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
+void usb_endp15_transmit(char *) __attribute__((weak, alias("usb_endp_default_transmit")));
 #endif // _USB_H_

@@ -3,12 +3,19 @@
 #include "usb.h"
 #include "string.h"
 
-#define LED_ON  GPIOC_PSOR=(1<<5)
-#define LED_OFF GPIOC_PCOR=(1<<5)
+#define LED_ON  GPIOC_PSOR = (1<<5)
+#define LED_OFF GPIOC_PCOR = (1<<5)
 
 void usb_endpoint_15_transmit(char *out)
 {
 	char *str = "HELLO FROM ENDPOINT 15";
+	int len = strlen(str);
+        memcpy(out,str,len);
+}
+
+void usb_endpoint_13_transmit(char *out)
+{
+	char *str = "HELLO FROM ENDPOINT 13";
 	int len = strlen(str);
         memcpy(out,str,len);
 }
@@ -30,8 +37,9 @@ int main(void)
     GPIOC_PDDR = (1<<5);   	// make this an output pin pin 13
     LED_OFF;                     // start with LED off
 
-    usb_set_endpoint_1_receive(usb_endpoint_1_receive);
-    usb_set_endpoint_15_transmit(usb_endpoint_15_transmit);
+    usb_set_endpoint_on_receive(usb_endpoint_1_receive, 1);
+    usb_set_endpoint_on_transmit(usb_endpoint_13_transmit, 13);
+    usb_set_endpoint_on_transmit(usb_endpoint_15_transmit, 15);
     usb_init();
 
     EnableInterrupts
